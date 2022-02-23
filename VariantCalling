@@ -1,0 +1,68 @@
+Demultiplex the GBS fastq into indiviudal fastq files with the samples contained in the barcode.txt file
+awk -v OFS="\t" ' NR > 1 {print $3, $4".fq"} ' barcodes.txt > sabre_formatted_barcode_file.txt
+sabre se -f input_file.fastq -b sabre_formatted_barcode_file.txt -u unknown_barcode.fastq
+
+Index genome for bwa, samtools and gatk
+bwa index ~/Kyuss_Genome/Kyuss_1697_assembly.fasta
+samtools faidx ~/Kyuss_Genome/Kyuss_1697_assembly.fasta
+~/gatk/./gatk  CreateSequenceDictionary -R ~/Kyuss_Genome/Kyuss_1697_assembly.fasta
+
+bwa mem alignment of fatsq file to the reference genome
+#!/bin/bash
+for f in *.fq 
+do 
+out1=${f##/} 
+out2=${out1/.fq/}.sam 
+bwa mem ~/Kyuss_Genome/Kyuss_1697_assembly.fa $f > $out2
+done
+
+Convert sam to bam
+#!/bin/bash
+for f in *.sam 
+do 
+r1=$f 
+r2=${f##*/} 
+r3=${r2/.sam/} 
+samtools sort $r1 > $r3.bam
+done
+
+Add readgroups to be read for variant calling
+#!/bin/bash
+for f in *.bam 
+do 
+r1=$f 
+r2=${f##*/} 
+r3=${r2/.bam/} 
+r4=${r2/.bam/}_RG.bam 
+java -jar ~/picard/build/libs/picard.jar AddOrReplaceReadGroups I=$r1 O=$r4 RGID=4 RGLB=lib1 RGPL=illumina RGPU=unit1 RGSM=$f
+done
+
+Index bam files
+#!/bin/bash
+for f in *RG.bam 
+do 
+~/gatk-4.1.2.0/gatk-4.1.2.0/./gatk BuildBamIndex -I $f
+
+Generate gvcfs
+#!/bin/bash
+for f in *RG.bam 
+do 
+r1=$f 
+r2=${f/_RG.bam/}.g.vcf.gz 
+~/gatk/./gatk --java-options "-Xmx4g" HaplotypeCaller --sample-ploidy 2 --pcr-indel-model AGGRESSIVE --dont-use-soft-clipped-bases true -R ~/Kyuss_Genome/Kyuss_1697_assembly.fa -I $f -O $r2 -ERC GVCF 
+done
+
+Create a genomic database for genomic variant calling: ls *RG.bam, then can copy all sample names
+~/gatk/./gatk GenomicsDBImport --genomicsdb-workspace-path ~/GBS_2/A5A6/gvcf --variant EAD-A5.g.vcf.gz --variant EAD-A6-1-1.g.vcf.gz --variant EAD-A6-2-3.g.vcf.gz --variant EAD-A6-3-5.g.vcf.gz --variant EAD-A6-6-3.g.vcf.gz  --variant EAD-A6-7.g.vcf.gz --variant EAD-A6-9-4.g.vcf.gz --variant EAD-A6-10-1.g.vcf.gz --variant EAD-A6-1-2.g.vcf.gz --variant EAD-A6-2-4.g.vcf.gz  --variant EAD-A6-3.g.vcf.gz --variant EAD-A6-6-4.g.vcf.gz --variant EAD-A6-8-1.g.vcf.gz --variant EAD-A6-9.g.vcf.gz --variant EAD-A6-10-2.g.vcf.gz   --variant EAD-A6-1-3.g.vcf.gz  --variant EAD-A6-2-5.g.vcf.gz  --variant EAD-A6-5-2.g.vcf.gz  --variant EAD-A6-6-5.g.vcf.gz  --variant EAD-A6-8-2.g.vcf.gz --variant EAD-A6.g.vcf.gz --variant EAD-A6-10-3.g.vcf.gz --variant EAD-A6-1-4.g.vcf.gz --variant EAD-A6-2.g.vcf.gz --variant EAD-A6-5-4.g.vcf.gz  --variant EAD-A6-6.g.vcf.gz    --variant EAD-A6-8-3.g.vcf.gz --variant EAD-A6-10-4.g.vcf.gz --variant EAD-A6-1-5.g.vcf.gz  --variant EAD-A6-3-1.g.vcf.gz --variant EAD-A6-5-5.g.vcf.gz --variant EAD-A6-7-1.g.vcf.gz --variant EAD-A6-8-4.g.vcf.gz --variant EAD-A6-10-5b.g.vcf.gz  --variant EAD-A6-1.g.vcf.gz --variant EAD-A6-3-2.g.vcf.gz --variant EAD-A6-5.g.vcf.gz --variant EAD-A6-7-2.g.vcf.gz --variant EAD-A6-8.g.vcf.gz --variant EAD-A6-10-5.g.vcf.gz --variant EAD-A6-2-1.g.vcf.gz --variant EAD-A6-3-3.g.vcf.gz --variant EAD-A6-6-1.g.vcf.gz --variant EAD-A6-7-4.g.vcf.gz --variant EAD-A6-9-2.g.vcf.gz --variant EAD-A6-10.g.vcf.gz --variant EAD-A6-2-2.g.vcf.gz --variant EAD-A6-3-4.g.vcf.gz --variant EAD-A6-6-2.g.vcf.gz --variant EAD-A6-7-5.g.vcf.gz --variant EAD-A6-9-3.g.vcf.gz --batch-size 95 --consolidate true --merge-input-intervals true --reader-threads 8 --max-num-intervals-to-import-in-parallel 4 --intervals ~/Kyuss_Genome/Kyuss_1697.bed
+
+Combine all samples to get a vcf with all samples
+~/gatk/./gatk GenotypeGVCFs  --output ~/GBS_2/A5A6/A5A6_GBS2.vcf.gz --variant gendb://gvcf --reference ~/Kyuss_Genome/Kyuss_1697_assembly.fa
+
+Index gvcf file
+bcftools index A5A6_GBS2.vcf.gz
+To unparse the file reformat to exclude these headers
+bcftools annotate -x FORMAT/PGT,FORMAT/PID,FORMAT/PS A5A6_GBS2.vcf.gz> A5A6_GBS2_annotated.vcf.gz
+Remove contig lines from the vcf to reduce size
+grep -v "^##contig" A5A6_GBS2_annotated.vcf.gz > up_A5A6_GBS2_chrm.vcf.gz
+Replace parsed genotype calls with unparsed ones
+sed -i 's!|!/!g' up_A5A6_GBS2_chrm.vcf.gz 
