@@ -1,0 +1,152 @@
+library(stringr)
+library(dplyr)
+library(ggplot2)
+
+
+##Reading vcf in as a table
+A5A6_kyuss_test <- readLines("~/Kyuss_GBS/A5A6/up2_A5A6_all_scaffolds.vcf")
+A5A6_kyuss_test_data <- read.table("~/Kyuss_GBS/A5A6/up2_A5A6_all_scaffolds.vcf", stringsAsFactors = FALSE)
+# filter for the columns names
+A5A6_kyuss_test<-A5A6_kyuss_test[-(grep("#CHROM",A5A6_kyuss_test)+1):-(length(A5A6_kyuss_test))]
+vcf_names<-unlist(strsplit(A5A6_kyuss_test[length(A5A6_kyuss_test)],"\t"))
+names(A5A6_kyuss_test_data)<-vcf_names
+
+## Filter vcf for variants homozygous in A5, different in A6 and het in F1's
+hom_A5A6_kyuss <- str_detect(A5A6_kyuss_test_data$`EAD-A5.bam`, "1/1") & str_detect(A5A6_kyuss_test_data$`EAD-A6.bam`, "0/0") & str_detect(A5A6_kyuss_test_data$`EAD-A6-1.bam`, "0/1") & str_detect(A5A6_kyuss_test_data$`EAD-A6-2.bam`, "0/1") & str_detect(A5A6_kyuss_test_data$`EAD-A6-3.bam`, "0/1") & str_detect(A5A6_kyuss_test_data$`EAD-A6-6.bam`, "0/1") & str_detect(A5A6_kyuss_test_data$`EAD-A6-8.bam`, "0/1")
+print(hom_A5A6_kyuss)
+hom_A5_A5A6_t <- A5A6_kyuss_test_data[hom_A5A6_kyuss,]
+hom_A6_A5A6 <- str_detect(A5A6_kyuss_test_data$`EAD-A5.bam`, "0/0") & str_detect(A5A6_kyuss_test_data$`EAD-A6.bam`, "1/1") & str_detect(A5A6_kyuss_test_data$`EAD-A6-1.bam`, "0/1") & str_detect(A5A6_kyuss_test_data$`EAD-A6-2.bam`, "0/1") & str_detect(A5A6_kyuss_test_data$`EAD-A6-3.bam`, "0/1") & str_detect(A5A6_kyuss_test_data$`EAD-A6-6.bam`, "0/1") & str_detect(A5A6_kyuss_test_data$`EAD-A6-8.bam`, "0/1")
+A5A6_kyuss_t <- A5A6_kyuss_test_data[hom_A6_A5A6,]
+combined_hom_A5A6_kyuss <- rbind(hom_A5_A5A6_t, A5A6_kyuss_t)
+
+## Filter for only F1S1 plants
+df1 <- select(combined_hom_A5A6_kyuss, "#CHROM", "POS", "EAD-A6-1-1.bam", "EAD-A6-1-2.bam", "EAD-A6-1-3.bam", "EAD-A6-1-4.bam", "EAD-A6-1-5.bam", "EAD-A6-2-1.bam", "EAD-A6-2-2.bam", "EAD-A6-2-3.bam", "EAD-A6-2-4.bam", "EAD-A6-2-5.bam", "EAD-A6-3-1.bam", "EAD-A6-3-2.bam", "EAD-A6-3-3.bam", "EAD-A6-3-4.bam", "EAD-A6-3-5.bam", "EAD-A6-6-1.bam", "EAD-A6-6-2.bam", "EAD-A6-6-3.bam", "EAD-A6-6-4.bam", "EAD-A6-6-5.bam", "EAD-A6-8-1.bam", "EAD-A6-8-2.bam", "EAD-A6-8-3.bam", "EAD-A6-8-4.bam")
+##extract all the characters before : to just get genotype calls
+df2 <- lapply(df1[,3:ncol(df1)], function(x){ str_extract(x, "[:graph:]{1,3}(?=:)")})
+head(df2)
+df3 <- data.frame(df2)
+df5 <- cbind(df1[,1:2], df2)
+
+df4 <- apply(df3, 1, function(x){
+  ##tabulate genotype counts and convert to df
+  tab<-as.data.frame(table(x))
+  ##get the total number of samples for each genotype
+  total<-sum(tab$Freq)
+  ##proportions of genotypes
+  tab$props<-tab$Freq/total
+  ##add missing heterozygotes
+  if("0/1" %in% tab$x){
+    #print("hets present")
+  } else{
+    #print("no hets")
+    tab<-rbind(tab, data.frame(x = "0/1", Freq = 0, props = 0))
+  }
+  ##add missing homozygotes_0
+  if("0/0" %in% tab$x){
+    #print("homs_0 present")
+  } else{
+    #print("no hom_0")
+    tab<-rbind(tab, data.frame(x = "0/0", Freq = 0, props = 0))
+  }
+  ##add missing hom_1
+  if("1/1" %in% tab$x){
+    #print("hom_1 present")
+  } else{
+    #print("no hom_1")
+    tab<-rbind(tab, data.frame(x = "1/1", Freq = 0, props = 0))
+  }
+  ##add missing no calls
+  if("./." %in% tab$x){
+    #print("no call present")
+  } else{
+    #print("no calls")
+    tab<-rbind(tab, data.frame(x = "./.", Freq = 0, props = 0))
+  }
+  ##reorder by the genotype string
+  tab<-tab[order(as.character(tab$x)),]
+  return(tab)
+})
+print(df4)
+##take out the loci with more than 2 alleles
+newdf4<-df4[unlist(lapply(df4, nrow))==4]
+newdf5<-df5[unlist(lapply(df4, nrow))==4,]
+
+#combine position and scaffold
+possies<-paste0(newdf5$`#CHROM`, "_", newdf5$POS)
+nrow(bind_rows(newdf4))
+length( rep(possies, each = 4))
+#make a big data frame with proprtions of each genotype for each scaffold
+df6<-data.frame(bind_rows(newdf4), Position = rep(possies, each = 4))
+
+##select only the heterozygote values
+hetsonly<-df6[df6$x == "0/1",]
+#position of each heterozygote proportion (uninformative)
+ggplot(hetsonly,aes(Position, props))+ geom_point()
+##distribution of proportion of heterozygous calls
+hist(hetsonly$props)
+##select the loci which have proportions of hets specified
+goldenratio<-hetsonly[hetsonly$props>0.4 & hetsonly$props<0.6,]
+goldenratio<-cbind(goldenratio,
+                   Pos = as.numeric(str_extract(goldenratio$Position,"(?<=\\_)[:graph:]{1,}")), 
+                   chr = str_extract(goldenratio$Position, "[:graph:]{1,}(?=\\_)"))
+table(goldenratio$chr)
+#Find Homozygotes at the same ratio
+dum<-df6[df6$x == "0/0" & df6$props>0.4 & df6$props<0.6,]
+dum2<-df6[df6$x == "1/1" & df6$props>0.4 & df6$props<0.6,]
+dumc<-rbind(dum, dum2)
+#Combine het and hom
+GRfilt<-goldenratio[goldenratio$Position %in% dumc$Position,]
+table(GRfilt$chr)
+
+chrm1<- GRfilt[GRfilt$chr == "chr1",]
+chrm2<- GRfilt[GRfilt$chr == "chr2",]
+chrm3<- GRfilt[GRfilt$chr == "chr3",]
+chrm4<- GRfilt[GRfilt$chr == "chr4",]
+chrm5<- GRfilt[GRfilt$chr == "chr5",]
+chrm6<- GRfilt[GRfilt$chr == "chr6",]
+chrm7<- GRfilt[GRfilt$chr == "chr7",]
+write.csv(GRfilt, "chrom5_all.csv")
+
+GRfilt<-GRfilt[!is.na(GRfilt$Pos),]
+hist(GRfilt$Pos)
+GRfilt$chr<-as.factor(GRfilt$chr)
+GRfilt$Poslog<-log(GRfilt$Pos)
+ggplot(GRfilt, aes(chr))+geom_bar(stat="count")
+ggplot(GRfilt, aes(chr, Pos, col = chr)) + geom_jitter(alpha = 0.5) + theme_linedraw() + ggtitle("A5A6")
+
+#Compare segregating loci to total loci (control)
+df6_test<-cbind(df6,
+                  Pos = as.numeric(str_extract(df6$Position,"(?<=\\_)[:graph:]{1,}")), 
+                  chr = str_extract(df6$Position, "[:graph:]{1,}(?=\\_)"))
+df6_test$hit[df6_test$Position %in% GRfilt$Position]<-"yes"
+df6_test<-df6_test[str_detect(df6_test$chr,"chr"),]
+ggplot(df6_test, aes(chr, Pos)) + geom_jitter(alpha = 0.03) + theme_linedraw()+ 
+geom_jitter(data=GRfilt, aes(chr, Pos, col = chr)) + ggtitle("A5A6")
+
+
+library(plotly)
+install.packages("gapminder")
+library(gapminder)
+library(tibble)
+
+P <- ggplot(GRfilt, aes(chr, Pos, col = chr, text = Pos)) + geom_jitter(alpha = 0.5) + theme_classic() + ggtitle("A5A6")
+fig <- ggplotly(P)
+fig
+
+table(df6_test$chr)
+table(df6_test$hit, df6_test$chr)
+table(GRfilt$chr)
+df6_test$hit<-"no"
+chi<-chisq.test(table(df6_test$hit, df6_test$chr))
+table(df6_test$hit, df6_test$chr)
+chi$expected
+chi$observed
+chi$residuals
+
+df_GR <- A5A6_kyuss_test_data[A5A6_kyuss_test_data$POS %in% chrm5$Pos,]
+A5A6_GR <- A5A6_kyuss_test_data[A5A6_kyuss_test_data$POS %in% GRfilt$Pos,]
+
+write.csv(chrm5, "A5A6chrm5.csv")
+
+
+(chrm5, "A5A6chrm5.csv")
